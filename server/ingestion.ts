@@ -63,10 +63,6 @@ function hasUsefulSummary(video: Pick<Video, "summaryBullets" | "title">): boole
   return true;
 }
 
-function needsRepair(video: Pick<Video, "title" | "transcriptText" | "summaryBullets">): boolean {
-  return !hasTranscript(video) || !hasUsefulSummary(video);
-}
-
 function normalizeDescription(value: string | undefined): string {
   return (value ?? "").replace(/\s+/g, " ").trim().slice(0, 5000);
 }
@@ -74,8 +70,13 @@ function normalizeDescription(value: string | undefined): string {
 function isShortFormVideo(input: {
   title: string;
   description: string;
+  youtubeUrl: string;
   durationSeconds?: number | null;
 }): boolean {
+  if (input.youtubeUrl.includes("/shorts/")) {
+    return true;
+  }
+
   const combinedText = `${input.title} ${input.description}`.toLowerCase();
   if (/#shorts?\b/.test(combinedText)) {
     return true;
@@ -85,6 +86,21 @@ function isShortFormVideo(input: {
     typeof input.durationSeconds === "number" &&
     input.durationSeconds > 0 &&
     input.durationSeconds <= 180
+  );
+}
+
+function needsRepair(
+  video: Pick<Video, "title" | "transcriptText" | "summaryBullets" | "youtubeUrl" | "durationSeconds">,
+): boolean {
+  return (
+    isShortFormVideo({
+      title: video.title,
+      description: "",
+      youtubeUrl: video.youtubeUrl,
+      durationSeconds: video.durationSeconds,
+    }) ||
+    !hasTranscript(video) ||
+    !hasUsefulSummary(video)
   );
 }
 
@@ -110,6 +126,7 @@ async function processVideoContent(input: {
   videoId: string;
   title: string;
   description: string;
+  youtubeUrl: string;
   existingTranscriptText?: string | null;
   existingTranscriptSource?: string | null;
   existingSummaryBullets?: string[] | null;
@@ -125,6 +142,7 @@ async function processVideoContent(input: {
     isShortFormVideo({
       title: input.title,
       description: bestDescription,
+      youtubeUrl: input.youtubeUrl,
       durationSeconds,
     })
   ) {
@@ -201,6 +219,7 @@ async function repairExistingVideos(addLog: (message: string) => void, deadlineA
         videoId: video.youtubeVideoId,
         title: video.title,
         description: normalizeDescription(video.description ?? ""),
+        youtubeUrl: video.youtubeUrl,
         existingTranscriptText: video.transcriptText,
         existingTranscriptSource: video.transcriptSource,
         existingSummaryBullets: video.summaryBullets ?? null,
@@ -349,6 +368,7 @@ export async function runIngestion(options?: IngestionOptions) {
               videoId,
               title,
               description,
+              youtubeUrl,
               existingTranscriptText: existing.transcriptText,
               existingTranscriptSource: existing.transcriptSource,
               existingSummaryBullets: existing.summaryBullets ?? null,
@@ -381,6 +401,7 @@ export async function runIngestion(options?: IngestionOptions) {
             videoId,
             title,
             description,
+            youtubeUrl,
           });
 
           await storage.createVideo({

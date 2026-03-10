@@ -102,6 +102,20 @@ function tokenize(text: string): string[] {
     .filter((word) => word.length >= 3 && !STOP_WORDS.has(word));
 }
 
+function normalizeForComparison(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isTitleLikeBullet(bullet: string, title: string): boolean {
+  const normalizedBullet = normalizeForComparison(bullet);
+  const normalizedTitle = normalizeForComparison(title);
+  return !!normalizedBullet && normalizedBullet === normalizedTitle;
+}
+
 function sentenceOverlap(left: string, right: string): number {
   const a = new Set(tokenize(left));
   const b = new Set(tokenize(right));
@@ -177,7 +191,9 @@ export function buildSummaryBullets(input: {
   }
 
   if (!transcriptText && rawDescription) {
-    const fallbackBullets = pickDescriptionBullets(rawDescription);
+    const fallbackBullets = pickDescriptionBullets(rawDescription).filter(
+      (bullet) => !isTitleLikeBullet(bullet, input.title),
+    );
     if (fallbackBullets.length > 0) {
       return fallbackBullets;
     }
@@ -196,6 +212,7 @@ export function buildSummaryBullets(input: {
     const compactSentence = candidate.sentence.replace(/[.!?]$/, "");
     if (
       compactSentence.length < 35 ||
+      isTitleLikeBullet(compactSentence, input.title) ||
       bullets.some((existing) => sentenceOverlap(existing, compactSentence) > 0.7)
     ) {
       continue;
@@ -209,7 +226,9 @@ export function buildSummaryBullets(input: {
     return bullets;
   }
 
-  const fallbackBullets = pickDescriptionBullets(rawDescription || sourceText).slice(0, 4);
+  const fallbackBullets = pickDescriptionBullets(rawDescription || sourceText)
+    .filter((bullet) => !isTitleLikeBullet(bullet, input.title))
+    .slice(0, 4);
   return fallbackBullets.length > 0 ? fallbackBullets : [input.title.trim()];
 }
 
@@ -220,18 +239,23 @@ async function fetchTranscriptWithLibrary(videoId: string): Promise<string | nul
   return cleaned || null;
 }
 
-function extractJsonObject(source: string, marker: string): unknown | null {
+function extractStructuredSection(
+  source: string,
+  marker: string,
+  openCharacter: string,
+  closeCharacter: string,
+): string | null {
   const markerIndex = source.indexOf(marker);
   if (markerIndex === -1) return null;
 
-  const objectStart = source.indexOf("{", markerIndex + marker.length);
-  if (objectStart === -1) return null;
+  const sectionStart = source.indexOf(openCharacter, markerIndex + marker.length);
+  if (sectionStart === -1) return null;
 
   let depth = 0;
   let inString = false;
   let escaping = false;
 
-  for (let index = objectStart; index < source.length; index++) {
+  for (let index = sectionStart; index < source.length; index++) {
     const character = source[index];
 
     if (escaping) {
@@ -251,15 +275,11 @@ function extractJsonObject(source: string, marker: string): unknown | null {
 
     if (inString) continue;
 
-    if (character === "{") depth++;
-    if (character === "}") depth--;
+    if (character === openCharacter) depth++;
+    if (character === closeCharacter) depth--;
 
     if (depth === 0) {
-      try {
-        return JSON.parse(source.slice(objectStart, index + 1));
-      } catch {
-        return null;
-      }
+      return source.slice(sectionStart, index + 1);
     }
   }
 
@@ -268,7 +288,7 @@ function extractJsonObject(source: string, marker: string): unknown | null {
 
 type WatchPageData = {
   description: string | null;
-  captionTracks: any[];
+  captionTracks: string[];
   durationSeconds: number | null;
 };
 
@@ -283,6 +303,18 @@ function parseDurationSeconds(value: unknown): number | null {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
+function decodeEscapedJsonString(value: string): string {
+  try {
+    return JSON.parse(`"${value}"`);
+  } catch {
+    return value
+      .replace(/\\n/g, "\n")
+      .replace(/\\u0026/g, "&")
+      .replace(/\\"/g, '"')
+      .replace(/\\\\/g, "\\");
+  }
+}
+
 async function fetchWatchPageData(videoId: string): Promise<WatchPageData> {
   const response = await fetch(`https://www.youtube.com/watch?v=${videoId}&hl=en`, {
     headers: REQUEST_HEADERS,
@@ -294,19 +326,30 @@ async function fetchWatchPageData(videoId: string): Promise<WatchPageData> {
 
   const html = await response.text();
   const playerResponse =
-    extractJsonObject(html, "var ytInitialPlayerResponse = ") ??
-    extractJsonObject(html, "ytInitialPlayerResponse = ");
+    extractStructuredSection(html, "var ytInitialPlayerResponse = ", "{", "}") ??
+    extractStructuredSection(html, "ytInitialPlayerResponse = ", "{", "}") ??
+    html;
+
+  const descriptionMatch = playerResponse.match(/"shortDescription":"((?:[^"\\]|\\.)*)"/);
+  const durationMatch = playerResponse.match(/"lengthSeconds":"(\d+)"/);
+  const captionTracksBlock =
+    extractStructuredSection(playerResponse, '"captionTracks":', "[", "]") ??
+    extractStructuredSection(html, '"captionTracks":', "[", "]");
 
   const description = cleanText(
-    stripHtml((playerResponse as any)?.videoDetails?.shortDescription ?? ""),
+    stripHtml(decodeEscapedJsonString(descriptionMatch?.[1] ?? "")),
   );
-  const durationSeconds = parseDurationSeconds((playerResponse as any)?.videoDetails?.lengthSeconds);
-  const captionTracks =
-    (playerResponse as any)?.captions?.playerCaptionsTracklistRenderer?.captionTracks ?? [];
+  const durationSeconds = parseDurationSeconds(durationMatch?.[1] ?? null);
+  const captionTracks = captionTracksBlock
+    ? Array.from(
+        captionTracksBlock.matchAll(/"baseUrl":"((?:[^"\\]|\\.)*)"/g),
+        (match) => decodeEscapedJsonString(match[1]),
+      )
+    : [];
 
   return {
     description: description || null,
-    captionTracks: Array.isArray(captionTracks) ? captionTracks : [],
+    captionTracks,
     durationSeconds,
   };
 }
@@ -319,15 +362,15 @@ async function fetchTranscriptFromWatchPage(videoId: string): Promise<string | n
   }
 
   const preferredTrack =
-    captionTracks.find((track: any) => track?.languageCode?.startsWith("en") && track?.kind !== "asr") ??
-    captionTracks.find((track: any) => track?.languageCode?.startsWith("en")) ??
+    captionTracks.find((track) => track.includes("lang=en") && !track.includes("kind=asr")) ??
+    captionTracks.find((track) => track.includes("lang=en")) ??
     captionTracks[0];
 
-  if (!preferredTrack?.baseUrl) {
+  if (!preferredTrack) {
     return null;
   }
 
-  const transcriptUrl = new URL(preferredTrack.baseUrl);
+  const transcriptUrl = new URL(preferredTrack);
   transcriptUrl.searchParams.set("fmt", "json3");
 
   const transcriptResponse = await fetch(transcriptUrl.toString(), {

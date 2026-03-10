@@ -7,10 +7,10 @@ export default async function handler(_req: any, res: any) {
     await seedChannels();
     const result = await runIngestion({
       mode: "repair",
-      deadlineMs: 45_000,
-      repairLimit: 12,
-      channelLimit: 6,
-      maxRecentVideosPerChannel: 2,
+      deadlineMs: 55_000,
+      repairLimit: 20,
+      channelLimit: 4,
+      maxRecentVideosPerChannel: 1,
     });
 
     return res.status(200).json({ message: result.message });

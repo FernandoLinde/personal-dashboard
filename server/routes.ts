@@ -33,10 +33,10 @@ export function registerRoutes(app: Express) {
       if (process.env.VERCEL) {
         const result = await runIngestion({
           mode: "repair",
-          deadlineMs: 45_000,
-          repairLimit: 12,
-          channelLimit: 6,
-          maxRecentVideosPerChannel: 2,
+          deadlineMs: 55_000,
+          repairLimit: 20,
+          channelLimit: 4,
+          maxRecentVideosPerChannel: 1,
         });
         return res.json({ message: result.message });
       }
@@ -174,10 +174,10 @@ export function registerRoutes(app: Express) {
     try {
       const result = await runIngestion({
         mode: "repair",
-        deadlineMs: 45_000,
-        repairLimit: 20,
-        channelLimit: 10,
-        maxRecentVideosPerChannel: 3,
+        deadlineMs: 55_000,
+        repairLimit: 30,
+        channelLimit: 8,
+        maxRecentVideosPerChannel: 2,
       });
       res.json({ message: result.message });
     } catch (err) {
