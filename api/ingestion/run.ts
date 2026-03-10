@@ -5,9 +5,15 @@ export default async function handler(_req: any, res: any) {
   try {
     await initializeDatabase();
     await seedChannels();
-    await runIngestion();
+    const result = await runIngestion({
+      mode: "repair",
+      deadlineMs: 45_000,
+      repairLimit: 12,
+      channelLimit: 6,
+      maxRecentVideosPerChannel: 2,
+    });
 
-    return res.status(200).json({ message: "Ingestion completed" });
+    return res.status(200).json({ message: result.message });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown ingestion error";
     console.error("Dedicated ingestion route failed:", error);

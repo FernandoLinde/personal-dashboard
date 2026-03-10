@@ -1,8 +1,12 @@
-import { storage } from "./storage.js";
-import type { InsertChannel, Video } from "../shared/schema.js";
-import YouTubeSR from "youtube-sr";
 import Parser from "rss-parser";
-import { buildSummaryBullets, fetchBestTranscript, fetchVideoSupportText } from "./video-processing.js";
+import YouTubeSR from "youtube-sr";
+import type { InsertChannel, Video } from "../shared/schema.js";
+import { storage } from "./storage.js";
+import {
+  buildSummaryBullets,
+  fetchBestTranscript,
+  fetchVideoSupportText,
+} from "./video-processing.js";
 
 const parser = new Parser();
 
@@ -31,6 +35,14 @@ const SEED_CHANNELS: InsertChannel[] = [
   { name: "All-In Podcast", youtubeUrl: "https://www.youtube.com/@allin", youtubeIdentifier: "@allin", category: "General", isActive: true },
 ];
 
+type IngestionOptions = {
+  mode?: "full" | "repair";
+  deadlineMs?: number;
+  repairLimit?: number;
+  channelLimit?: number;
+  maxRecentVideosPerChannel?: number;
+};
+
 function hasTranscript(video: Pick<Video, "transcriptText">): boolean {
   return !!video.transcriptText?.trim();
 }
@@ -49,6 +61,10 @@ function hasUsefulSummary(video: Pick<Video, "summaryBullets" | "title">): boole
   }
 
   return true;
+}
+
+function needsRepair(video: Pick<Video, "title" | "transcriptText" | "summaryBullets">): boolean {
+  return !hasTranscript(video) || !hasUsefulSummary(video);
 }
 
 function normalizeDescription(value: string | undefined): string {
@@ -119,9 +135,61 @@ async function processVideoContent(input: {
   };
 }
 
-export async function runIngestion() {
+function buildDeadline(options?: IngestionOptions): number {
+  return Date.now() + (options?.deadlineMs ?? 55_000);
+}
+
+function hasTimeRemaining(deadlineAt: number): boolean {
+  return Date.now() < deadlineAt;
+}
+
+async function repairExistingVideos(addLog: (message: string) => void, deadlineAt: number, limit: number) {
+  let repaired = 0;
+  const candidates = await storage.getVideosForRepair(limit);
+
+  for (const video of candidates) {
+    if (!hasTimeRemaining(deadlineAt)) {
+      addLog("Stopped repair pass early to stay within time limit.");
+      break;
+    }
+
+    if (!needsRepair(video)) {
+      continue;
+    }
+
+    try {
+      const processed = await processVideoContent({
+        videoId: video.youtubeVideoId,
+        title: video.title,
+        description: normalizeDescription(video.description ?? ""),
+        existingTranscriptText: video.transcriptText,
+        existingTranscriptSource: video.transcriptSource,
+        existingSummaryBullets: video.summaryBullets ?? null,
+      });
+
+      await storage.updateVideo(video.id, {
+        description: processed.description,
+        transcriptText: processed.transcriptText,
+        transcriptSource: processed.transcriptSource,
+        summaryBullets: processed.summaryBullets,
+        status: processed.status,
+      });
+
+      repaired++;
+      addLog(`Repaired transcript/summary for: ${video.title}`);
+    } catch (error) {
+      addLog(`Repair failed for ${video.title}: ${(error as Error).message}`);
+    }
+  }
+
+  return repaired;
+}
+
+export async function runIngestion(options?: IngestionOptions) {
   console.log("Starting ingestion run...");
   const run = await storage.createIngestionRun({ status: "running" });
+  const deadlineAt = buildDeadline(options);
+  const mode = options?.mode ?? "full";
 
   let videosFound = 0;
   let videosCreated = 0;
@@ -135,12 +203,49 @@ export async function runIngestion() {
   };
 
   try {
+    if (mode === "repair") {
+      videosUpdated += await repairExistingVideos(
+        addLog,
+        deadlineAt,
+        options?.repairLimit ?? 12,
+      );
+    }
+
+    if (!hasTimeRemaining(deadlineAt)) {
+      await storage.updateIngestionRun(run.id, {
+        status: "completed",
+        finishedAt: new Date(),
+        videosFound,
+        videosCreated,
+        videosUpdated,
+        errorsCount,
+        logText: logs.join("\n"),
+      });
+
+      return {
+        message: `Refresh completed with ${videosUpdated} videos repaired.`,
+        videosFound,
+        videosCreated,
+        videosUpdated,
+      };
+    }
+
     const allChannels = await storage.getChannels();
     const activeChannels = allChannels.filter((channel) => channel.isActive);
+    const selectedChannels =
+      mode === "repair"
+        ? activeChannels.slice(0, options?.channelLimit ?? 6)
+        : activeChannels;
+
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
-    for (const channel of activeChannels) {
+    for (const channel of selectedChannels) {
+      if (!hasTimeRemaining(deadlineAt)) {
+        addLog("Stopped channel scan early to stay within time limit.");
+        break;
+      }
+
       addLog(`Checking channel: ${channel.name} (${channel.youtubeIdentifier})`);
 
       try {
@@ -160,14 +265,21 @@ export async function runIngestion() {
         const feed = await parser.parseURL(feedUrl);
         const items = Array.isArray(feed.items) ? feed.items : [];
 
-        const recentItems = items.filter((item) => {
-          const publishedAt = item.pubDate ? new Date(item.pubDate) : null;
-          return !!publishedAt && !Number.isNaN(publishedAt.getTime()) && publishedAt >= sevenDaysAgo;
-        });
+        const recentItems = items
+          .filter((item) => {
+            const publishedAt = item.pubDate ? new Date(item.pubDate) : null;
+            return !!publishedAt && !Number.isNaN(publishedAt.getTime()) && publishedAt >= sevenDaysAgo;
+          })
+          .slice(0, options?.maxRecentVideosPerChannel ?? (mode === "repair" ? 2 : 5));
 
-        addLog(`Found ${recentItems.length} videos in the last 7 days for ${channel.name}`);
+        addLog(`Found ${recentItems.length} recent videos for ${channel.name}`);
 
         for (const item of recentItems) {
+          if (!hasTimeRemaining(deadlineAt)) {
+            addLog("Stopped video processing early to stay within time limit.");
+            break;
+          }
+
           const videoId = item.id?.replace(/^yt:video:/, "") ?? "";
           if (!videoId) {
             addLog(`Skipping an item with no video id for ${channel.name}`);
@@ -185,10 +297,7 @@ export async function runIngestion() {
           const existing = await storage.getVideoByYoutubeId(videoId);
 
           if (existing) {
-            const needsTranscript = !hasTranscript(existing);
-            const needsSummary = !hasUsefulSummary(existing);
-
-            if (!needsTranscript && !needsSummary) {
+            if (!needsRepair(existing)) {
               continue;
             }
 
@@ -261,6 +370,15 @@ export async function runIngestion() {
     });
 
     console.log("Ingestion completed successfully.");
+    return {
+      message:
+        mode === "repair"
+          ? `Refresh completed with ${videosUpdated} videos repaired and ${videosCreated} new videos added.`
+          : "Ingestion completed",
+      videosFound,
+      videosCreated,
+      videosUpdated,
+    };
   } catch (error) {
     addLog(`Global ingestion error: ${(error as Error).message}`);
 
@@ -273,5 +391,7 @@ export async function runIngestion() {
       errorsCount: errorsCount + 1,
       logText: logs.join("\n"),
     });
+
+    throw error;
   }
 }

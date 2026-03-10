@@ -31,15 +31,23 @@ export function registerRoutes(app: Express) {
   const handleIngestionRun = async (_req: Request, res: Response) => {
     try {
       if (process.env.VERCEL) {
-        await runIngestion();
-        return res.json({ message: "Ingestion completed" });
+        const result = await runIngestion({
+          mode: "repair",
+          deadlineMs: 45_000,
+          repairLimit: 12,
+          channelLimit: 6,
+          maxRecentVideosPerChannel: 2,
+        });
+        return res.json({ message: result.message });
       }
 
       runIngestion().catch(console.error);
       return res.json({ message: "Ingestion started in the background" });
     } catch (err) {
       console.error("Error starting ingestion:", err);
-      return res.status(500).json({ message: "Internal server error" });
+      return res.status(500).json({
+        message: err instanceof Error ? err.message : "Internal server error",
+      });
     }
   };
 
@@ -164,11 +172,19 @@ export function registerRoutes(app: Express) {
     }
 
     try {
-      await runIngestion();
-      res.json({ message: "Scheduled ingestion completed" });
+      const result = await runIngestion({
+        mode: "repair",
+        deadlineMs: 45_000,
+        repairLimit: 20,
+        channelLimit: 10,
+        maxRecentVideosPerChannel: 3,
+      });
+      res.json({ message: result.message });
     } catch (err) {
       console.error("Error running scheduled ingestion:", err);
-      res.status(500).json({ message: "Internal server error" });
+      res.status(500).json({
+        message: err instanceof Error ? err.message : "Internal server error",
+      });
     }
   });
 }

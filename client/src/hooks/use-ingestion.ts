@@ -13,12 +13,12 @@ export function useRunIngestion() {
         headers: { "Content-Type": "application/json" },
         credentials: "include",
       });
-      
+
+      const data = await res.json().catch(() => null);
       if (!res.ok) {
-        throw new Error("Failed to run ingestion");
+        throw new Error(data?.message || "Failed to run ingestion");
       }
-      
-      const data = await res.json();
+
       return api.ingestion.run.responses[200].parse(data);
     },
     onSuccess: (data) => {

@@ -22,6 +22,7 @@ export interface IStorage {
 
   // Videos
   getVideos(params?: { search?: string; category?: string; channelId?: number; limit?: number }): Promise<VideoWithChannel[]>;
+  getVideosForRepair(limit?: number): Promise<Video[]>;
   getVideo(id: number): Promise<VideoWithChannel | undefined>;
   getVideoByYoutubeId(youtubeId: string): Promise<Video | undefined>;
   createVideo(video: InsertVideo): Promise<Video>;
@@ -103,6 +104,14 @@ export class DatabaseStorage implements IStorage {
     }
 
     return finalResults;
+  }
+
+  async getVideosForRepair(limit = 12): Promise<Video[]> {
+    return await db
+      .select()
+      .from(videos)
+      .orderBy(desc(videos.publishedAt))
+      .limit(limit);
   }
 
   async getVideo(id: number): Promise<VideoWithChannel | undefined> {
