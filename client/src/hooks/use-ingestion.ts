@@ -22,18 +22,21 @@ export function useRunIngestion() {
       return api.ingestion.run.responses[200].parse(data);
     },
     onSuccess: (data) => {
+      const completed = /completed/i.test(data.message || "");
       toast({
-        title: "Ingestion Started",
+        title: completed ? "Feed Updated" : "Ingestion Started",
         description: data.message || "Background task is running to fetch new videos.",
       });
-      // Refresh once now and again after the background work has time to finish.
+
       queryClient.invalidateQueries({ queryKey: [api.videos.list.path] });
-      window.setTimeout(() => {
-        queryClient.invalidateQueries({ queryKey: [api.videos.list.path] });
-      }, 4000);
-      window.setTimeout(() => {
-        queryClient.invalidateQueries({ queryKey: [api.videos.list.path] });
-      }, 10000);
+      if (!completed) {
+        window.setTimeout(() => {
+          queryClient.invalidateQueries({ queryKey: [api.videos.list.path] });
+        }, 4000);
+        window.setTimeout(() => {
+          queryClient.invalidateQueries({ queryKey: [api.videos.list.path] });
+        }, 10000);
+      }
     },
     onError: (error) => {
       toast({

@@ -10,8 +10,8 @@ import {
   type Channel,
   type Video,
   type IngestionRun
-} from "@shared/schema";
-import { eq, desc, and, ilike, inArray, gte } from "drizzle-orm";
+} from "../shared/schema";
+import { eq, desc, and, inArray } from "drizzle-orm";
 
 export interface IStorage {
   // Channels

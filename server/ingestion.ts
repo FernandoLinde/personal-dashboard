@@ -1,5 +1,5 @@
 import { storage } from "./storage";
-import type { InsertChannel, Video } from "@shared/schema";
+import type { InsertChannel, Video } from "../shared/schema";
 import YouTubeSR from "youtube-sr";
 import Parser from "rss-parser";
 import { buildSummaryBullets, fetchBestTranscript } from "./video-processing";

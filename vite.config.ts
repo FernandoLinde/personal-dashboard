@@ -3,6 +3,8 @@ import react from "@vitejs/plugin-react";
 import path from "path";
 import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
 
+const isVercelBuild = process.env.VERCEL === "1" || process.env.VERCEL === "true";
+
 export default defineConfig({
   plugins: [
     react(),
@@ -28,7 +30,9 @@ export default defineConfig({
   },
   root: path.resolve(import.meta.dirname, "client"),
   build: {
-    outDir: path.resolve(import.meta.dirname, "dist/public"),
+    outDir: isVercelBuild
+      ? path.resolve(import.meta.dirname, "public")
+      : path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
   },
   server: {
