@@ -1,24 +1,27 @@
-import { useState, useMemo } from "react";
-import { LayoutGrid, FilterX, Loader2 } from "lucide-react";
+import { useState, useMemo, useEffect } from "react";
+import { LayoutGrid, FilterX, Loader2, Plus, X } from "lucide-react";
 import { Header } from "@/components/Header";
 import { VideoCard } from "@/components/VideoCard";
-import { VideoDrawer } from "@/components/VideoDrawer";
 import { useVideos } from "@/hooks/use-videos";
 import { useChannels } from "@/hooks/use-channels";
 import { Button } from "@/components/ui/button";
-import type { VideoWithChannel } from "@shared/schema";
-
-const CATEGORIES = ["all", "Tech", "Macro", "General"];
+import { Input } from "@/components/ui/input";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { queryClient, apiRequest } from "@/lib/queryClient";
+import type { InsertChannel } from "@shared/schema";
+import { api } from "@shared/routes";
 
 export default function Dashboard() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
   const [selectedChannelId, setSelectedChannelId] = useState<number | undefined>();
-  
-  const [selectedVideo, setSelectedVideo] = useState<VideoWithChannel | null>(null);
+  const [showAddChannel, setShowAddChannel] = useState(false);
+  const [newChannelName, setNewChannelName] = useState("");
+  const [newChannelYoutubeId, setNewChannelYoutubeId] = useState("");
+  const [newChannelCategory, setNewChannelCategory] = useState("Tech");
+  const [isAddingNewCategory, setIsAddingNewCategory] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState("");
 
-  // Debounce search query conceptually (in a real app, use useDebounce hook)
-  // For simplicity, we pass it directly to the query which will refetch.
   const { data: videos, isLoading: videosLoading, isError: videosError } = useVideos({
     search: searchQuery || undefined,
     category: selectedCategory,
@@ -26,13 +29,64 @@ export default function Dashboard() {
     limit: 100
   });
 
-  const { data: channels } = useChannels();
+  const { data: channels, refetch: refetchChannels } = useChannels();
+  const { data: categories = [] } = useQuery({
+    queryKey: [api.categories.list.path],
+    queryFn: async () => {
+      const res = await fetch(api.categories.list.path, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch categories");
+      return res.json();
+    },
+  });
+
+  const createChannelMutation = useMutation({
+    mutationFn: async (data: InsertChannel) => {
+      const res = await apiRequest("/api/channels", "POST", data);
+      return res.json();
+    },
+    onSuccess: () => {
+      refetchChannels();
+      queryClient.invalidateQueries({ queryKey: [api.categories.list.path] });
+      setShowAddChannel(false);
+      setNewChannelName("");
+      setNewChannelYoutubeId("");
+      setNewChannelCategory("Tech");
+    }
+  });
+
+  const deleteChannelMutation = useMutation({
+    mutationFn: async (channelId: number) => {
+      const res = await apiRequest(`/api/channels/${channelId}`, "DELETE");
+      return res.json();
+    },
+    onSuccess: () => {
+      refetchChannels();
+      queryClient.invalidateQueries({ queryKey: [api.categories.list.path] });
+    }
+  });
+
+  const handleAddChannel = async () => {
+    if (!newChannelName.trim() || !newChannelYoutubeId.trim()) return;
+    
+    const youtubeId = newChannelYoutubeId.startsWith("@") ? newChannelYoutubeId : `@${newChannelYoutubeId}`;
+    
+    createChannelMutation.mutate({
+      name: newChannelName,
+      youtubeUrl: `https://www.youtube.com/${youtubeId}`,
+      youtubeIdentifier: youtubeId,
+      category: newChannelCategory,
+      isActive: true,
+    });
+  };
 
   const handleClearFilters = () => {
     setSearchQuery("");
     setSelectedCategory("all");
     setSelectedChannelId(undefined);
   };
+
+  const allCategories = ["all", ...categories.filter(cat => cat !== "all")];
+  const categoryOptions = categories.length > 0 ? categories : ["Tech", "Macro", "General"];
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -48,7 +102,7 @@ export default function Dashboard() {
               Categories
             </h3>
             <div className="flex flex-col gap-1">
-              {CATEGORIES.map(cat => (
+              {allCategories.map(cat => (
                 <button
                   key={cat}
                   onClick={() => setSelectedCategory(cat)}
@@ -67,13 +121,69 @@ export default function Dashboard() {
           {/* Channel Filter */}
           {channels && channels.length > 0 && (
             <div className="space-y-3">
-              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                Channels
-              </h3>
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  Channels
+                </h3>
+                <button
+                  onClick={() => setShowAddChannel(!showAddChannel)}
+                  className="text-xs text-primary hover:text-primary/80 transition-colors"
+                  title="Add channel"
+                >
+                  <Plus className="w-4 h-4" />
+                </button>
+              </div>
+
+              {showAddChannel && (
+                <div className="bg-white/5 border border-white/10 rounded-lg p-3 space-y-2 mb-3">
+                  <Input
+                    placeholder="Channel name"
+                    value={newChannelName}
+                    onChange={(e) => setNewChannelName(e.target.value)}
+                    className="h-8 text-xs bg-white/5 border-white/10"
+                  />
+                  <Input
+                    placeholder="YouTube ID (@channelname)"
+                    value={newChannelYoutubeId}
+                    onChange={(e) => setNewChannelYoutubeId(e.target.value)}
+                    className="h-8 text-xs bg-white/5 border-white/10"
+                  />
+                  <select
+                    value={newChannelCategory}
+                    onChange={(e) => setNewChannelCategory(e.target.value)}
+                    className="w-full h-8 text-xs bg-white/5 border border-white/10 rounded px-2 text-foreground"
+                  >
+                    {categoryOptions.map(cat => (
+                      <option key={cat} value={cat} className="bg-card">
+                        {cat}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      className="flex-1 h-8 text-xs rounded-full bg-white text-black hover:bg-white/90"
+                      onClick={handleAddChannel}
+                      disabled={createChannelMutation.isPending}
+                    >
+                      Add
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="flex-1 h-8 text-xs rounded-full border-white/10 hover:bg-white/5"
+                      onClick={() => setShowAddChannel(false)}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              )}
+
               <div className="flex flex-col gap-1 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
                 <button
                   onClick={() => setSelectedChannelId(undefined)}
-                  className={`text-sm text-left px-3 py-2 rounded-lg transition-colors ${
+                  className={`text-sm text-left px-3 py-2 rounded-lg transition-colors flex items-center justify-between ${
                     selectedChannelId === undefined 
                       ? 'bg-primary/10 text-primary font-medium' 
                       : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'
@@ -82,17 +192,18 @@ export default function Dashboard() {
                   All Channels
                 </button>
                 {channels.map(channel => (
-                  <button
-                    key={channel.id}
-                    onClick={() => setSelectedChannelId(channel.id)}
-                    className={`text-sm text-left px-3 py-2 rounded-lg transition-colors truncate ${
-                      selectedChannelId === channel.id 
-                        ? 'bg-primary/10 text-primary font-medium' 
-                        : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'
-                    }`}
-                  >
-                    {channel.name}
-                  </button>
+                  <div key={channel.id} className="flex items-center group">
+                    <button
+                      onClick={() => setSelectedChannelId(channel.id)}
+                      className={`flex-1 text-sm text-left px-3 py-2 rounded-lg transition-colors truncate ${
+                        selectedChannelId === channel.id 
+                          ? 'bg-primary/10 text-primary font-medium' 
+                          : 'text-muted-foreground hover:bg-white/5 hover:text-foreground'
+                      }`}
+                    >
+                      {channel.name}
+                    </button>
+                  </div>
                 ))}
               </div>
             </div>
@@ -136,7 +247,6 @@ export default function Dashboard() {
                   key={video.id} 
                   video={video} 
                   index={index}
-                  onOpenDrawer={setSelectedVideo} 
                 />
               ))}
             </div>
@@ -160,12 +270,6 @@ export default function Dashboard() {
           )}
         </div>
       </main>
-
-      <VideoDrawer 
-        video={selectedVideo} 
-        isOpen={!!selectedVideo} 
-        onClose={() => setSelectedVideo(null)} 
-      />
     </div>
   );
 }

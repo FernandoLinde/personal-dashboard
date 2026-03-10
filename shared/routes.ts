@@ -56,6 +56,32 @@ export const api = {
         200: z.array(z.custom<typeof channels.$inferSelect>()),
       },
     },
+    create: {
+      method: 'POST' as const,
+      path: '/api/channels' as const,
+      input: insertChannelSchema,
+      responses: {
+        200: z.custom<typeof channels.$inferSelect>(),
+        400: errorSchemas.validation,
+      },
+    },
+    delete: {
+      method: 'DELETE' as const,
+      path: '/api/channels/:id' as const,
+      responses: {
+        200: z.object({ message: z.string() }),
+        404: errorSchemas.notFound,
+      },
+    },
+  },
+  categories: {
+    list: {
+      method: 'GET' as const,
+      path: '/api/categories' as const,
+      responses: {
+        200: z.array(z.string()),
+      },
+    },
   },
   ingestion: {
     run: {

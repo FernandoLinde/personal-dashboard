@@ -52,7 +52,7 @@ export async function registerRoutes(
       if (!video) {
         return res.status(404).json({ message: 'Video not found' });
       }
-      if (!video.transcriptText) {
+      if (!video.transcriptText || !video.transcriptText.trim()) {
         return res.status(404).json({ message: 'Transcript not available for this video' });
       }
       
@@ -77,6 +77,52 @@ export async function registerRoutes(
       res.json(channels);
     } catch (err) {
       console.error("Error fetching channels:", err);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // Create channel
+  app.post(api.channels.create.path, async (req: Request, res: Response) => {
+    try {
+      const input = api.channels.create.input?.parse(req.body);
+      if (!input) return res.status(400).json({ message: "Invalid input" });
+      
+      const channel = await storage.createChannel(input);
+      res.json(channel);
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({
+          message: err.errors[0].message,
+          field: err.errors[0].path.join('.'),
+        });
+      }
+      console.error("Error creating channel:", err);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // Delete channel
+  app.delete(api.channels.delete.path, async (req: Request, res: Response) => {
+    try {
+      const success = await storage.deleteChannel(Number(req.params.id));
+      if (!success) {
+        return res.status(404).json({ message: "Channel not found" });
+      }
+      res.json({ message: "Channel deleted successfully" });
+    } catch (err) {
+      console.error("Error deleting channel:", err);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // Get categories
+  app.get(api.categories.list.path, async (req: Request, res: Response) => {
+    try {
+      const allChannels = await storage.getChannels();
+      const categories = [...new Set(allChannels.map(c => c.category))];
+      res.json(categories.sort());
+    } catch (err) {
+      console.error("Error fetching categories:", err);
       res.status(500).json({ message: "Internal server error" });
     }
   });

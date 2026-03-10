@@ -2,10 +2,21 @@ import { db } from "./db";
 import { storage } from "./storage";
 import { channels, videos, type InsertChannel } from "@shared/schema";
 import { eq } from "drizzle-orm";
-import { openai } from "./replit_integrations/image/client"; // Reusing the OpenAI client initialized here
-import { YoutubeTranscript } from "youtube-transcript"; // We will need to install this
+import { YoutubeTranscript } from "youtube-transcript";
 import YouTubeSR from "youtube-sr";
 import Parser from "rss-parser";
+import OpenAI from "openai";
+
+let openai: OpenAI;
+
+// Initialize OpenAI client with user's API key or fallback to Replit integration
+if (process.env.OPENAI_API_KEY) {
+  openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+} else {
+  // Use Replit AI Integrations
+  const { openai: replitOpenai } = await import("./replit_integrations/image/client");
+  openai = replitOpenai;
+}
 
 const parser = new Parser();
 
