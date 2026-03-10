@@ -45,12 +45,19 @@ function normalizeDescription(value: string | undefined): string {
 
 export async function seedChannels() {
   const existingChannels = await storage.getChannels();
-  if (existingChannels.length === 0) {
-    console.log("Seeding channels...");
-    for (const channel of SEED_CHANNELS) {
+  const existingIdentifiers = new Set(
+    existingChannels.map((channel) => channel.youtubeIdentifier),
+  );
+  const missingChannels = SEED_CHANNELS.filter(
+    (channel) => !existingIdentifiers.has(channel.youtubeIdentifier),
+  );
+
+  if (missingChannels.length > 0) {
+    console.log(`Seeding ${missingChannels.length} missing channels...`);
+    for (const channel of missingChannels) {
       await storage.createChannel(channel);
     }
-    console.log("Channels seeded successfully.");
+    console.log("Missing channels seeded successfully.");
   }
 }
 
