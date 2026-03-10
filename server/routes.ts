@@ -28,6 +28,21 @@ export function registerRoutes(app: Express) {
     .then(() => seedChannels())
     .catch(console.error);
 
+  const handleIngestionRun = async (_req: Request, res: Response) => {
+    try {
+      if (process.env.VERCEL) {
+        await runIngestion();
+        return res.json({ message: "Ingestion completed" });
+      }
+
+      runIngestion().catch(console.error);
+      return res.json({ message: "Ingestion started in the background" });
+    } catch (err) {
+      console.error("Error starting ingestion:", err);
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  };
+
   app.get(api.videos.list.path, async (req: Request, res: Response) => {
     try {
       const input = api.videos.list.input?.parse(req.query) || {};
@@ -140,20 +155,8 @@ export function registerRoutes(app: Express) {
     }
   });
 
-  app.post(api.ingestion.run.path, async (_req: Request, res: Response) => {
-    try {
-      if (process.env.VERCEL) {
-        await runIngestion();
-        return res.json({ message: "Ingestion completed" });
-      }
-
-      runIngestion().catch(console.error);
-      res.json({ message: "Ingestion started in the background" });
-    } catch (err) {
-      console.error("Error starting ingestion:", err);
-      res.status(500).json({ message: "Internal server error" });
-    }
-  });
+  app.post(api.ingestion.run.path, handleIngestionRun);
+  app.get(api.ingestion.run.path, handleIngestionRun);
 
   app.get("/api/cron/ingestion", async (req: Request, res: Response) => {
     if (!isAuthorizedCronRequest(req)) {
