@@ -1,0 +1,416 @@
+Build a simple personal dashboard web app that tracks recent YouTube videos from a fixed list of channels I provide. This is a private tool for daily personal use, not a public consumer app. Prioritize reliability, speed, clean UX, and low maintenance over visual complexity.
+
+Product goal:
+Create a YouTube monitoring dashboard that automatically pulls all videos uploaded in the last 7 days from my selected channels, stores them, shows them in one reverse-chronological feed, lets me search and filter them, generates a short AI summary for each video, and lets me download the transcript for each video.
+
+Core requirements
+
+Dashboard and feed
+
+Show all tracked videos from the last 7 days in one unified feed
+
+Sort by publish date/time descending, newest first
+
+Each video card should include:
+
+thumbnail
+
+title
+
+channel name
+
+category
+
+publish date
+
+button to watch on YouTube
+
+3-4 short bullet point AI summary
+
+button to view transcript
+
+button to download transcript as .txt
+
+transcript source label:
+
+"YouTube transcript"
+
+"Generated transcript"
+
+"Transcript unavailable"
+
+Search and filters
+
+Search only across:
+
+video title
+
+channel name
+
+publish date
+
+Add filters for:
+
+category: Tech / Macro / General
+
+channel
+
+Add a "clear filters" action
+
+Keep the UI very fast and easy to scan
+
+Transcript logic
+
+First try to fetch the native YouTube transcript/captions
+
+If unavailable, fall back to speech-to-text transcription
+
+Store the transcript text in the database
+
+Allow transcript viewing in the UI
+
+Allow direct download as plain text
+
+Clearly show which transcript source was used
+
+AI summary logic
+
+Generate 3-4 concise bullet points for each video
+
+Summaries should be short, scannable, and factual
+
+Avoid fluff, intro language, and generic phrases
+
+Focus on the main discussion topics, arguments, announcements, or takeaways
+
+Store summaries so they are not regenerated on every page load
+
+Ingestion and automation
+
+Automatically check all tracked channels on a recurring schedule
+
+Only ingest videos published within the last 7 days
+
+Avoid duplicates
+
+If a video already exists, do not recreate it
+
+If transcript or summary is missing, retry processing
+
+Add basic logging for ingestion runs and failures
+
+Make the scheduled sync easy to configure
+
+Scope and UX
+
+No login/auth needed unless required for admin protection
+
+Personal dashboard only
+
+Simple, clean, minimal UI
+
+Responsive enough to work on laptop and mobile
+
+Prefer practicality over fancy design
+
+Recommended stack
+Use a stack that is easy to build and maintain inside Replit:
+
+Frontend: Next.js
+
+Backend/API: Next.js API routes or a lightweight server inside the same project
+
+Database: Supabase Postgres
+
+Scheduled jobs: Replit scheduled jobs / cron
+
+AI summaries: OpenAI API
+
+Transcript fallback: speech-to-text pipeline
+
+Styling: Tailwind CSS
+
+Deployment: Replit deployable app
+
+If you think a different stack is materially better inside Replit, explain why briefly in comments and proceed with the best pragmatic option.
+
+Implementation details
+
+A. Data model
+Create a database schema with at least these tables:
+
+channels
+
+id
+
+name
+
+youtube_url
+
+youtube_identifier
+
+category
+
+is_active
+
+created_at
+
+updated_at
+
+videos
+
+id
+
+youtube_video_id (unique)
+
+channel_id
+
+title
+
+description
+
+thumbnail_url
+
+youtube_url
+
+published_at
+
+category
+
+transcript_text
+
+transcript_source
+
+summary_bullets (json or text array)
+
+duration_seconds
+
+status
+
+created_at
+
+updated_at
+
+ingestion_runs
+
+id
+
+started_at
+
+finished_at
+
+status
+
+videos_found
+
+videos_created
+
+videos_updated
+
+errors_count
+
+log_text
+
+B. Pages
+
+Main dashboard page
+
+unified chronological feed
+
+search bar
+
+category filter
+
+channel filter
+
+refresh button if useful
+
+cards or compact rows
+
+Video detail modal or drawer
+
+full transcript view
+
+summary bullets
+
+metadata
+
+download transcript button
+
+link to YouTube
+
+C. Processing pipeline
+Build a pipeline that:
+
+reads all tracked channels
+
+fetches recent uploads
+
+filters to last 7 days
+
+stores new videos
+
+fetches transcript if available
+
+if unavailable, tries transcription fallback
+
+generates summary bullets from transcript, and if transcript unavailable, uses metadata/description as fallback
+
+marks processing status clearly
+
+D. Reliability and edge cases
+Handle:
+
+missing transcript
+
+failed speech-to-text
+
+rate limits
+
+API errors
+
+duplicate videos
+
+missing thumbnails
+
+channels with no uploads in last 7 days
+
+partial failures where metadata succeeds but transcript/summary fails
+
+E. Admin / configuration
+Create a simple config file or seed file containing the tracked channels below. Make it easy to edit later.
+Also include environment variables for:
+
+Supabase URL
+
+Supabase key
+
+OpenAI API key
+
+YouTube API key if used
+
+any transcript service keys if needed
+
+F. Code quality
+
+Organize the project cleanly
+
+Add clear comments where setup is non-obvious
+
+Include a README with:
+
+setup steps
+
+environment variables
+
+how scheduled ingestion works
+
+how to run locally in Replit
+
+how to deploy
+
+known limitations
+
+G. Important product decisions
+
+Feed should show all channels mixed together in one timeline
+
+Search does not need full transcript search
+
+Only care about videos from the last 7 days
+
+This app will be used frequently, so optimize for fast refresh and low friction
+
+Do not overengineer auth, permissions, or collaboration
+
+Keep the UI sharp but simple
+
+Tracked channels
+
+Tech
+
+Jordi Visser: https://www.youtube.com/@JordiVisserLabs/videos
+
+Moonshots: https://www.youtube.com/@peterdiamandis/videos
+
+Acquired: https://www.youtube.com/@AcquiredFM/videos
+
+Y Combinator: https://www.youtube.com/@ycombinator/videos
+
+BitBiasedAI: https://www.youtube.com/@BitBiasedAI/videos
+
+IBM Technology: https://www.youtube.com/@IBMTechnology/videos
+
+Invest Like the Best: https://www.youtube.com/@ILTB_Podcast/videos
+
+Stratechery: https://www.youtube.com/@Stratechery/videos
+
+Giant Ideas: https://www.youtube.com/@GiantVentures/videos
+
+Pioneers of AI: https://www.youtube.com/@PioneersofAI/videos
+
+AI Upload: https://www.youtube.com/@AIUpload/videos
+
+No Priors: AI, Machine Learning, Tech, & Startups: https://www.youtube.com/@NoPriorsPodcast/videos
+
+Marina Wyss - AI & Machine Learning: https://www.youtube.com/@MarinaWyssAI/videos
+
+Everyday AI: https://www.youtube.com/@EverydayAI_/videos
+
+Macro
+
+Bob Elliott: https://www.youtube.com/@BobEUnlimited/videos
+
+MacroVoices: https://www.youtube.com/@macrovoices7508/videos
+
+General
+
+StockPickers: https://www.youtube.com/@StockPickers/videos
+
+MarketMakers: https://www.youtube.com/@mmakers/videos
+
+Bloomberg Originals: https://www.youtube.com/@business/videos
+
+WHG: https://www.youtube.com/@wealthhighgovernance/videos
+
+Masters of Scale: https://www.youtube.com/@MastersofScale_/videos
+
+All-In Podcast: https://www.youtube.com/@allin/videos
+
+Build priority order
+
+Working ingestion of recent videos
+
+Database storage
+
+Chronological dashboard
+
+Search and filters
+
+Transcript retrieval/download
+
+AI summaries
+
+Scheduled automation
+
+UI polish
+
+Output I want from you in Replit
+
+full working app scaffold
+
+database schema / migrations
+
+seed/config for channels
+
+ingestion job
+
+dashboard UI
+
+transcript viewer/download flow
+
+summary generation flow
+
+README with setup instructions
+
+Do not just give me a mockup. Build the actual app structure and implementation.
