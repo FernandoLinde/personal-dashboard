@@ -1,4 +1,5 @@
 import express, { type NextFunction, type Request, type Response } from "express";
+import { initializeDatabase } from "./db";
 import { registerRoutes } from "./routes";
 
 declare module "http" {
@@ -20,6 +21,7 @@ export function log(message: string, source = "express") {
 
 export function createApp() {
   const app = express();
+  const dbReady = initializeDatabase();
 
   app.use(
     express.json({
@@ -30,6 +32,15 @@ export function createApp() {
   );
 
   app.use(express.urlencoded({ extended: false }));
+
+  app.use((req, res, next) => {
+    dbReady
+      .then(() => next())
+      .catch((error) => {
+        console.error("Database initialization failed:", error);
+        res.status(500).json({ message: "Database initialization failed" });
+      });
+  });
 
   app.use((req, res, next) => {
     const start = Date.now();

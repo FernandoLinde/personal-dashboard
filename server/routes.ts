@@ -1,6 +1,7 @@
 import type { Express, Request, Response } from "express";
 import { z } from "zod";
 import { api } from "../shared/routes";
+import { initializeDatabase } from "./db";
 import { runIngestion, seedChannels } from "./ingestion";
 import { storage } from "./storage";
 
@@ -23,7 +24,9 @@ function isAuthorizedCronRequest(req: Request): boolean {
 }
 
 export function registerRoutes(app: Express) {
-  seedChannels().catch(console.error);
+  initializeDatabase()
+    .then(() => seedChannels())
+    .catch(console.error);
 
   app.get(api.videos.list.path, async (req: Request, res: Response) => {
     try {
