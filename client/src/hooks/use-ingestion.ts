@@ -26,8 +26,14 @@ export function useRunIngestion() {
         title: "Ingestion Started",
         description: data.message || "Background task is running to fetch new videos.",
       });
-      // Invalidate videos to show any new ones
+      // Refresh once now and again after the background work has time to finish.
       queryClient.invalidateQueries({ queryKey: [api.videos.list.path] });
+      window.setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: [api.videos.list.path] });
+      }, 4000);
+      window.setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: [api.videos.list.path] });
+      }, 10000);
     },
     onError: (error) => {
       toast({

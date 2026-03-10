@@ -1,27 +1,12 @@
-import { db } from "./db";
 import { storage } from "./storage";
-import { channels, videos, type InsertChannel } from "@shared/schema";
-import { eq } from "drizzle-orm";
-import { YoutubeTranscript } from "youtube-transcript";
+import type { InsertChannel, Video } from "@shared/schema";
 import YouTubeSR from "youtube-sr";
 import Parser from "rss-parser";
-import OpenAI from "openai";
-
-let openai: OpenAI;
-
-// Initialize OpenAI client with user's API key or fallback to Replit integration
-if (process.env.OPENAI_API_KEY) {
-  openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-} else {
-  // Use Replit AI Integrations
-  const { openai: replitOpenai } = await import("./replit_integrations/image/client");
-  openai = replitOpenai;
-}
+import { buildSummaryBullets, fetchBestTranscript } from "./video-processing";
 
 const parser = new Parser();
 
 const SEED_CHANNELS: InsertChannel[] = [
-  // Tech
   { name: "Jordi Visser", youtubeUrl: "https://www.youtube.com/@JordiVisserLabs", youtubeIdentifier: "@JordiVisserLabs", category: "Tech", isActive: true },
   { name: "Moonshots", youtubeUrl: "https://www.youtube.com/@peterdiamandis", youtubeIdentifier: "@peterdiamandis", category: "Tech", isActive: true },
   { name: "Acquired", youtubeUrl: "https://www.youtube.com/@AcquiredFM", youtubeIdentifier: "@AcquiredFM", category: "Tech", isActive: true },
@@ -36,12 +21,8 @@ const SEED_CHANNELS: InsertChannel[] = [
   { name: "No Priors: AI, Machine Learning, Tech, & Startups", youtubeUrl: "https://www.youtube.com/@NoPriorsPodcast", youtubeIdentifier: "@NoPriorsPodcast", category: "Tech", isActive: true },
   { name: "Marina Wyss - AI & Machine Learning", youtubeUrl: "https://www.youtube.com/@MarinaWyssAI", youtubeIdentifier: "@MarinaWyssAI", category: "Tech", isActive: true },
   { name: "Everyday AI", youtubeUrl: "https://www.youtube.com/@EverydayAI_", youtubeIdentifier: "@EverydayAI_", category: "Tech", isActive: true },
-  
-  // Macro
   { name: "Bob Elliott", youtubeUrl: "https://www.youtube.com/@BobEUnlimited", youtubeIdentifier: "@BobEUnlimited", category: "Macro", isActive: true },
   { name: "MacroVoices", youtubeUrl: "https://www.youtube.com/@macrovoices7508", youtubeIdentifier: "@macrovoices7508", category: "Macro", isActive: true },
-  
-  // General
   { name: "StockPickers", youtubeUrl: "https://www.youtube.com/@StockPickers", youtubeIdentifier: "@StockPickers", category: "General", isActive: true },
   { name: "MarketMakers", youtubeUrl: "https://www.youtube.com/@mmakers", youtubeIdentifier: "@mmakers", category: "General", isActive: true },
   { name: "Bloomberg Originals", youtubeUrl: "https://www.youtube.com/@business", youtubeIdentifier: "@business", category: "General", isActive: true },
@@ -50,143 +31,190 @@ const SEED_CHANNELS: InsertChannel[] = [
   { name: "All-In Podcast", youtubeUrl: "https://www.youtube.com/@allin", youtubeIdentifier: "@allin", category: "General", isActive: true },
 ];
 
+function hasTranscript(video: Pick<Video, "transcriptText">): boolean {
+  return !!video.transcriptText?.trim();
+}
+
+function hasSummary(video: Pick<Video, "summaryBullets">): boolean {
+  return Array.isArray(video.summaryBullets) && video.summaryBullets.length > 0;
+}
+
+function normalizeDescription(value: string | undefined): string {
+  return (value ?? "").replace(/\s+/g, " ").trim().slice(0, 5000);
+}
+
 export async function seedChannels() {
   const existingChannels = await storage.getChannels();
   if (existingChannels.length === 0) {
     console.log("Seeding channels...");
-    for (const c of SEED_CHANNELS) {
-      await storage.createChannel(c);
+    for (const channel of SEED_CHANNELS) {
+      await storage.createChannel(channel);
     }
     console.log("Channels seeded successfully.");
   }
 }
 
+async function processVideoContent(input: {
+  videoId: string;
+  title: string;
+  description: string;
+  existingTranscriptText?: string | null;
+  existingTranscriptSource?: string | null;
+  existingSummaryBullets?: string[] | null;
+}) {
+  let transcriptText = input.existingTranscriptText?.trim() || null;
+  let transcriptSource = input.existingTranscriptSource || "Transcript unavailable";
+
+  if (!transcriptText) {
+    const transcriptResult = await fetchBestTranscript(input.videoId);
+    transcriptText = transcriptResult.transcriptText;
+    transcriptSource = transcriptResult.transcriptSource;
+  }
+
+  const summaryBullets =
+    Array.isArray(input.existingSummaryBullets) && input.existingSummaryBullets.length > 0
+      ? input.existingSummaryBullets
+      : buildSummaryBullets({
+          title: input.title,
+          description: input.description,
+          transcriptText,
+        });
+
+  return {
+    transcriptText,
+    transcriptSource,
+    summaryBullets,
+    status: "processed" as const,
+  };
+}
+
 export async function runIngestion() {
   console.log("Starting ingestion run...");
   const run = await storage.createIngestionRun({ status: "running" });
-  
+
   let videosFound = 0;
   let videosCreated = 0;
+  let videosUpdated = 0;
   let errorsCount = 0;
-  let logs: string[] = [];
+  const logs: string[] = [];
 
-  const addLog = (msg: string) => {
-    console.log(msg);
-    logs.push(`[${new Date().toISOString()}] ${msg}`);
+  const addLog = (message: string) => {
+    console.log(message);
+    logs.push(`[${new Date().toISOString()}] ${message}`);
   };
 
   try {
     const allChannels = await storage.getChannels();
-    const activeChannels = allChannels.filter(c => c.isActive);
-    
-    // Only videos from last 7 days
+    const activeChannels = allChannels.filter((channel) => channel.isActive);
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
     for (const channel of activeChannels) {
       addLog(`Checking channel: ${channel.name} (${channel.youtubeIdentifier})`);
+
       try {
-        // Find channel ID first
-        const channelRes = await YouTubeSR.YouTube.search(channel.youtubeIdentifier, { type: "channel", limit: 1 });
-        if (!channelRes || channelRes.length === 0) {
+        const channelResults = await YouTubeSR.YouTube.search(channel.youtubeIdentifier, {
+          type: "channel",
+          limit: 1,
+        });
+
+        if (!channelResults || channelResults.length === 0) {
           addLog(`Could not find channel ID for ${channel.youtubeIdentifier}`);
           errorsCount++;
           continue;
         }
-        
-        const channelId = channelRes[0].id;
-        
-        // Fetch recent videos via RSS feed
-        const feedUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`;
-        const feed = await parser.parseURL(feedUrl);
-        
-        let recentVideos = feed.items || [];
 
-        // We will just process up to 5 most recent to not overload in demo
-        for (const v of recentVideos.slice(0, 5)) {
-          const videoId = v.id.replace('yt:video:', '');
-          
-          const existing = await storage.getVideoByYoutubeId(videoId);
-          if (existing) {
+        const youtubeChannelId = channelResults[0].id;
+        const feedUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${youtubeChannelId}`;
+        const feed = await parser.parseURL(feedUrl);
+        const items = Array.isArray(feed.items) ? feed.items : [];
+
+        const recentItems = items.filter((item) => {
+          const publishedAt = item.pubDate ? new Date(item.pubDate) : null;
+          return !!publishedAt && !Number.isNaN(publishedAt.getTime()) && publishedAt >= sevenDaysAgo;
+        });
+
+        addLog(`Found ${recentItems.length} videos in the last 7 days for ${channel.name}`);
+
+        for (const item of recentItems) {
+          const videoId = item.id?.replace(/^yt:video:/, "") ?? "";
+          if (!videoId) {
+            addLog(`Skipping an item with no video id for ${channel.name}`);
+            errorsCount++;
             continue;
           }
 
           videosFound++;
-          
-          let transcriptText = null;
-          let transcriptSource = "Transcript unavailable";
-          
-          try {
-            const transcriptItems = await YoutubeTranscript.fetchTranscript(videoId);
-            transcriptText = transcriptItems.map(t => t.text).join(' ');
-            transcriptSource = "YouTube transcript";
-          } catch (e) {
-            addLog(`Could not fetch transcript for ${videoId}. Error: ${(e as Error).message}`);
-          }
 
-          let summaryBullets: string[] = [];
-          
-          // Use description from RSS or transcript
-          const description = v.contentSnippet || v.content || "";
-          const textToSummarize = transcriptText || description || "No text available.";
-          
-          if (textToSummarize.length > 50) {
-            try {
-              const summaryResponse = await openai.chat.completions.create({
-                model: "gpt-5.1", // Standard text model via AI Integrations
-                messages: [
-                  { 
-                    role: "system", 
-                    content: "You are a helpful assistant that summarizes YouTube videos into 3-4 concise bullet points. Avoid fluff. Focus on main topics, arguments, or takeaways. Output a JSON array of strings." 
-                  },
-                  {
-                    role: "user",
-                    content: `Summarize the following video text:\n\n${textToSummarize.slice(0, 8000)}` // Slice to avoid context limit
-                  }
-                ],
-                response_format: { type: "json_object" }
-              });
-
-              const content = summaryResponse.choices[0]?.message?.content;
-              if (content) {
-                const parsed = JSON.parse(content);
-                if (Array.isArray(parsed)) summaryBullets = parsed;
-                else if (parsed.bullets && Array.isArray(parsed.bullets)) summaryBullets = parsed.bullets;
-                else if (parsed.summary && Array.isArray(parsed.summary)) summaryBullets = parsed.summary;
-                else summaryBullets = Object.values(parsed).filter(val => typeof val === 'string') as string[];
-              }
-            } catch (e) {
-              addLog(`Failed to generate summary for ${videoId}. Error: ${(e as Error).message}`);
-              errorsCount++;
-            }
-          }
-
-          const publishedAt = v.pubDate ? new Date(v.pubDate) : new Date();
-          
-          // Generate a thumbnail URL based on video ID
+          const title = item.title || "Untitled video";
+          const description = normalizeDescription(item.contentSnippet || item.content || "");
+          const publishedAt = item.pubDate ? new Date(item.pubDate) : new Date();
           const thumbnailUrl = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
-          
+          const youtubeUrl = item.link || `https://www.youtube.com/watch?v=${videoId}`;
+          const existing = await storage.getVideoByYoutubeId(videoId);
+
+          if (existing) {
+            const needsTranscript = !hasTranscript(existing);
+            const needsSummary = !hasSummary(existing);
+
+            if (!needsTranscript && !needsSummary) {
+              continue;
+            }
+
+            const processed = await processVideoContent({
+              videoId,
+              title,
+              description,
+              existingTranscriptText: existing.transcriptText,
+              existingTranscriptSource: existing.transcriptSource,
+              existingSummaryBullets: existing.summaryBullets ?? null,
+            });
+
+            await storage.updateVideo(existing.id, {
+              title,
+              description,
+              thumbnailUrl,
+              youtubeUrl,
+              publishedAt,
+              category: channel.category,
+              transcriptText: processed.transcriptText,
+              transcriptSource: processed.transcriptSource,
+              summaryBullets: processed.summaryBullets,
+              status: processed.status,
+            });
+
+            videosUpdated++;
+            addLog(`Updated missing transcript/summary for: ${title}`);
+            continue;
+          }
+
+          const processed = await processVideoContent({
+            videoId,
+            title,
+            description,
+          });
+
           await storage.createVideo({
             youtubeVideoId: videoId,
             channelId: channel.id,
-            title: v.title || "Unknown Title",
-            description: description.slice(0, 500),
+            title,
+            description,
             thumbnailUrl,
-            youtubeUrl: v.link || `https://www.youtube.com/watch?v=${videoId}`,
+            youtubeUrl,
             publishedAt,
             category: channel.category,
-            transcriptText,
-            transcriptSource,
-            summaryBullets,
-            durationSeconds: 0, // Not available easily from RSS
-            status: "processed"
+            transcriptText: processed.transcriptText,
+            transcriptSource: processed.transcriptSource,
+            summaryBullets: processed.summaryBullets,
+            durationSeconds: 0,
+            status: processed.status,
           });
-          
+
           videosCreated++;
-          addLog(`Added video: ${v.title}`);
+          addLog(`Added video: ${title}`);
         }
-      } catch (err) {
-        addLog(`Error processing channel ${channel.name}: ${(err as Error).message}`);
+      } catch (error) {
+        addLog(`Error processing channel ${channel.name}: ${(error as Error).message}`);
         errorsCount++;
       }
     }
@@ -196,20 +224,23 @@ export async function runIngestion() {
       finishedAt: new Date(),
       videosFound,
       videosCreated,
+      videosUpdated,
       errorsCount,
-      logText: logs.join('\n')
+      logText: logs.join("\n"),
     });
-    console.log("Ingestion completed successfully.");
 
-  } catch (globalErr) {
-    addLog(`Global ingestion error: ${(globalErr as Error).message}`);
+    console.log("Ingestion completed successfully.");
+  } catch (error) {
+    addLog(`Global ingestion error: ${(error as Error).message}`);
+
     await storage.updateIngestionRun(run.id, {
       status: "failed",
       finishedAt: new Date(),
       videosFound,
       videosCreated,
+      videosUpdated,
       errorsCount: errorsCount + 1,
-      logText: logs.join('\n')
+      logText: logs.join("\n"),
     });
   }
 }
