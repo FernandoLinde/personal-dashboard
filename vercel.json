@@ -1,21 +1,10 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "vite build",
-  "functions": {
-    "server.ts": {
-      "maxDuration": 60
-    }
-  },
   "crons": [
     {
       "path": "/api/cron/ingestion",
       "schedule": "0 12 * * *"
-    }
-  ],
-  "rewrites": [
-    {
-      "source": "/:path((?!api(?:/|$)).*)",
-      "destination": "/"
     }
   ]
 }
