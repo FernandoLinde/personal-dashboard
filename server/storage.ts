@@ -11,7 +11,7 @@ import {
   type Video,
   type IngestionRun
 } from "../shared/schema.js";
-import { eq, desc, and, inArray } from "drizzle-orm";
+import { eq, desc, and, inArray, ne, or, isNull } from "drizzle-orm";
 
 export interface IStorage {
   // Channels
@@ -34,6 +34,10 @@ export interface IStorage {
 }
 
 export class DatabaseStorage implements IStorage {
+  private buildVisibleVideoCondition() {
+    return or(isNull(videos.status), ne(videos.status, "filtered"));
+  }
+
   async getChannels(): Promise<Channel[]> {
     return await db.select().from(channels);
   }
@@ -56,7 +60,7 @@ export class DatabaseStorage implements IStorage {
   async getVideos(params?: { search?: string; category?: string; channelId?: number; limit?: number }): Promise<VideoWithChannel[]> {
     let query = db.select().from(videos).orderBy(desc(videos.publishedAt)).$dynamic();
     
-    const conditions = [];
+    const conditions = [this.buildVisibleVideoCondition()];
     
     if (params?.category) {
       conditions.push(eq(videos.category, params.category));
@@ -110,6 +114,7 @@ export class DatabaseStorage implements IStorage {
     return await db
       .select()
       .from(videos)
+      .where(this.buildVisibleVideoCondition())
       .orderBy(desc(videos.publishedAt))
       .limit(limit);
   }

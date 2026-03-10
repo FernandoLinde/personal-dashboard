@@ -269,7 +269,19 @@ function extractJsonObject(source: string, marker: string): unknown | null {
 type WatchPageData = {
   description: string | null;
   captionTracks: any[];
+  durationSeconds: number | null;
 };
+
+function parseDurationSeconds(value: unknown): number | null {
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number.parseInt(value, 10)
+        : Number.NaN;
+
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
 
 async function fetchWatchPageData(videoId: string): Promise<WatchPageData> {
   const response = await fetch(`https://www.youtube.com/watch?v=${videoId}&hl=en`, {
@@ -288,12 +300,14 @@ async function fetchWatchPageData(videoId: string): Promise<WatchPageData> {
   const description = cleanText(
     stripHtml((playerResponse as any)?.videoDetails?.shortDescription ?? ""),
   );
+  const durationSeconds = parseDurationSeconds((playerResponse as any)?.videoDetails?.lengthSeconds);
   const captionTracks =
     (playerResponse as any)?.captions?.playerCaptionsTracklistRenderer?.captionTracks ?? [];
 
   return {
     description: description || null,
     captionTracks: Array.isArray(captionTracks) ? captionTracks : [],
+    durationSeconds,
   };
 }
 
@@ -336,15 +350,18 @@ async function fetchTranscriptFromWatchPage(videoId: string): Promise<string | n
 
 export async function fetchVideoSupportText(videoId: string): Promise<{
   descriptionText: string | null;
+  durationSeconds: number | null;
 }> {
   try {
     const watchPageData = await fetchWatchPageData(videoId);
     return {
       descriptionText: watchPageData.description,
+      durationSeconds: watchPageData.durationSeconds,
     };
   } catch {
     return {
       descriptionText: null,
+      durationSeconds: null,
     };
   }
 }

@@ -71,6 +71,23 @@ function normalizeDescription(value: string | undefined): string {
   return (value ?? "").replace(/\s+/g, " ").trim().slice(0, 5000);
 }
 
+function isShortFormVideo(input: {
+  title: string;
+  description: string;
+  durationSeconds?: number | null;
+}): boolean {
+  const combinedText = `${input.title} ${input.description}`.toLowerCase();
+  if (/#shorts?\b/.test(combinedText)) {
+    return true;
+  }
+
+  return (
+    typeof input.durationSeconds === "number" &&
+    input.durationSeconds > 0 &&
+    input.durationSeconds <= 180
+  );
+}
+
 export async function seedChannels() {
   const existingChannels = await storage.getChannels();
   const existingIdentifiers = new Set(
@@ -102,6 +119,24 @@ async function processVideoContent(input: {
     (supportText.descriptionText && supportText.descriptionText.length > input.description.length
       ? supportText.descriptionText
       : input.description) || input.title;
+  const durationSeconds = supportText.durationSeconds;
+
+  if (
+    isShortFormVideo({
+      title: input.title,
+      description: bestDescription,
+      durationSeconds,
+    })
+  ) {
+    return {
+      description: bestDescription,
+      transcriptText: null,
+      transcriptSource: "Filtered short video",
+      summaryBullets: [],
+      durationSeconds,
+      status: "filtered" as const,
+    };
+  }
 
   let transcriptText = input.existingTranscriptText?.trim() || null;
   let transcriptSource = input.existingTranscriptSource || "Transcript unavailable";
@@ -118,8 +153,11 @@ async function processVideoContent(input: {
   }
 
   const summaryBullets =
-    Array.isArray(input.existingSummaryBullets) && input.existingSummaryBullets.length > 0
-      ? input.existingSummaryBullets
+    hasUsefulSummary({
+      title: input.title,
+      summaryBullets: input.existingSummaryBullets ?? null,
+    })
+      ? [...(input.existingSummaryBullets ?? [])]
       : buildSummaryBullets({
           title: input.title,
           description: bestDescription,
@@ -131,6 +169,7 @@ async function processVideoContent(input: {
     transcriptText,
     transcriptSource,
     summaryBullets,
+    durationSeconds,
     status: "processed" as const,
   };
 }
@@ -172,11 +211,16 @@ async function repairExistingVideos(addLog: (message: string) => void, deadlineA
         transcriptText: processed.transcriptText,
         transcriptSource: processed.transcriptSource,
         summaryBullets: processed.summaryBullets,
+        durationSeconds: processed.durationSeconds ?? null,
         status: processed.status,
       });
 
       repaired++;
-      addLog(`Repaired transcript/summary for: ${video.title}`);
+      addLog(
+        processed.status === "filtered"
+          ? `Filtered short video: ${video.title}`
+          : `Repaired transcript/summary for: ${video.title}`,
+      );
     } catch (error) {
       addLog(`Repair failed for ${video.title}: ${(error as Error).message}`);
     }
@@ -320,11 +364,16 @@ export async function runIngestion(options?: IngestionOptions) {
               transcriptText: processed.transcriptText,
               transcriptSource: processed.transcriptSource,
               summaryBullets: processed.summaryBullets,
+              durationSeconds: processed.durationSeconds ?? null,
               status: processed.status,
             });
 
             videosUpdated++;
-            addLog(`Updated missing transcript/summary for: ${title}`);
+            addLog(
+              processed.status === "filtered"
+                ? `Filtered short video: ${title}`
+                : `Updated missing transcript/summary for: ${title}`,
+            );
             continue;
           }
 
@@ -346,12 +395,16 @@ export async function runIngestion(options?: IngestionOptions) {
             transcriptText: processed.transcriptText,
             transcriptSource: processed.transcriptSource,
             summaryBullets: processed.summaryBullets,
-            durationSeconds: 0,
+            durationSeconds: processed.durationSeconds ?? null,
             status: processed.status,
           });
 
           videosCreated++;
-          addLog(`Added video: ${title}`);
+          addLog(
+            processed.status === "filtered"
+              ? `Skipped short video from feed: ${title}`
+              : `Added video: ${title}`,
+          );
         }
       } catch (error) {
         addLog(`Error processing channel ${channel.name}: ${(error as Error).message}`);
