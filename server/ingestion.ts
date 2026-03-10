@@ -1,8 +1,8 @@
-import { storage } from "./storage";
-import type { InsertChannel, Video } from "../shared/schema";
+import { storage } from "./storage.js";
+import type { InsertChannel, Video } from "../shared/schema.js";
 import YouTubeSR from "youtube-sr";
 import Parser from "rss-parser";
-import { buildSummaryBullets, fetchBestTranscript } from "./video-processing";
+import { buildSummaryBullets, fetchBestTranscript } from "./video-processing.js";
 
 const parser = new Parser();
 

@@ -1,9 +1,9 @@
 import type { Express, Request, Response } from "express";
 import { z } from "zod";
-import { api } from "../shared/routes";
-import { initializeDatabase } from "./db";
-import { runIngestion, seedChannels } from "./ingestion";
-import { storage } from "./storage";
+import { api } from "../shared/routes.js";
+import { initializeDatabase } from "./db.js";
+import { runIngestion, seedChannels } from "./ingestion.js";
+import { storage } from "./storage.js";
 
 function getBearerToken(req: Request): string | null {
   const authHeader = req.headers.authorization;

@@ -3,7 +3,7 @@ let cachedApp: ((req: any, res: any) => void | Promise<void>) | null = null;
 export default async function handler(req: any, res: any) {
   try {
     if (!cachedApp) {
-      const { createApp } = await import("../server/app");
+      const { createApp } = await import("../server/app.js");
       cachedApp = createApp();
     }
 

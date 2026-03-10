@@ -1,6 +1,6 @@
 import express, { type NextFunction, type Request, type Response } from "express";
-import { initializeDatabase } from "./db";
-import { registerRoutes } from "./routes";
+import { initializeDatabase } from "./db.js";
+import { registerRoutes } from "./routes.js";
 
 declare module "http" {
   interface IncomingMessage {

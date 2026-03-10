@@ -1,4 +1,4 @@
-import { db } from "./db";
+import { db } from "./db.js";
 import {
   channels,
   videos,
@@ -10,7 +10,7 @@ import {
   type Channel,
   type Video,
   type IngestionRun
-} from "../shared/schema";
+} from "../shared/schema.js";
 import { eq, desc, and, inArray } from "drizzle-orm";
 
 export interface IStorage {

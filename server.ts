@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import type { Request, Response } from "express";
-import { createApp } from "./server/app";
+import { createApp } from "./server/app.js";
 
 const app = createApp();
 const publicIndexPath = path.resolve(process.cwd(), "public", "index.html");

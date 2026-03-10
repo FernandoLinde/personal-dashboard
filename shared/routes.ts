@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { insertChannelSchema, insertVideoSchema, channels, videos, type VideoWithChannel } from './schema';
+import { insertChannelSchema, insertVideoSchema, channels, videos, type VideoWithChannel } from './schema.js';
 
 export const errorSchemas = {
   validation: z.object({
