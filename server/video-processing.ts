@@ -90,6 +90,10 @@ function cleanText(text: string): string {
   );
 }
 
+function stripHtml(text: string): string {
+  return text.replace(/<[^>]+>/g, " ");
+}
+
 function tokenize(text: string): string[] {
   return text
     .toLowerCase()
@@ -262,7 +266,12 @@ function extractJsonObject(source: string, marker: string): unknown | null {
   return null;
 }
 
-async function fetchTranscriptFromWatchPage(videoId: string): Promise<string | null> {
+type WatchPageData = {
+  description: string | null;
+  captionTracks: any[];
+};
+
+async function fetchWatchPageData(videoId: string): Promise<WatchPageData> {
   const response = await fetch(`https://www.youtube.com/watch?v=${videoId}&hl=en`, {
     headers: REQUEST_HEADERS,
   });
@@ -276,10 +285,22 @@ async function fetchTranscriptFromWatchPage(videoId: string): Promise<string | n
     extractJsonObject(html, "var ytInitialPlayerResponse = ") ??
     extractJsonObject(html, "ytInitialPlayerResponse = ");
 
+  const description = cleanText(
+    stripHtml((playerResponse as any)?.videoDetails?.shortDescription ?? ""),
+  );
   const captionTracks =
     (playerResponse as any)?.captions?.playerCaptionsTracklistRenderer?.captionTracks ?? [];
 
-  if (!Array.isArray(captionTracks) || captionTracks.length === 0) {
+  return {
+    description: description || null,
+    captionTracks: Array.isArray(captionTracks) ? captionTracks : [],
+  };
+}
+
+async function fetchTranscriptFromWatchPage(videoId: string): Promise<string | null> {
+  const watchPageData = await fetchWatchPageData(videoId);
+  const captionTracks = watchPageData.captionTracks;
+  if (captionTracks.length === 0) {
     return null;
   }
 
@@ -311,6 +332,21 @@ async function fetchTranscriptFromWatchPage(videoId: string): Promise<string | n
     .join(" ");
 
   return cleanText(transcript) || null;
+}
+
+export async function fetchVideoSupportText(videoId: string): Promise<{
+  descriptionText: string | null;
+}> {
+  try {
+    const watchPageData = await fetchWatchPageData(videoId);
+    return {
+      descriptionText: watchPageData.description,
+    };
+  } catch {
+    return {
+      descriptionText: null,
+    };
+  }
 }
 
 export async function fetchBestTranscript(videoId: string): Promise<{

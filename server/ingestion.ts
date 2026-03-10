@@ -2,7 +2,7 @@ import { storage } from "./storage.js";
 import type { InsertChannel, Video } from "../shared/schema.js";
 import YouTubeSR from "youtube-sr";
 import Parser from "rss-parser";
-import { buildSummaryBullets, fetchBestTranscript } from "./video-processing.js";
+import { buildSummaryBullets, fetchBestTranscript, fetchVideoSupportText } from "./video-processing.js";
 
 const parser = new Parser();
 
@@ -35,8 +35,20 @@ function hasTranscript(video: Pick<Video, "transcriptText">): boolean {
   return !!video.transcriptText?.trim();
 }
 
-function hasSummary(video: Pick<Video, "summaryBullets">): boolean {
-  return Array.isArray(video.summaryBullets) && video.summaryBullets.length > 0;
+function hasUsefulSummary(video: Pick<Video, "summaryBullets" | "title">): boolean {
+  if (!Array.isArray(video.summaryBullets) || video.summaryBullets.length === 0) {
+    return false;
+  }
+
+  if (video.summaryBullets.length === 1) {
+    const onlyBullet = video.summaryBullets[0]?.trim().toLowerCase();
+    const title = video.title.trim().toLowerCase();
+    if (!onlyBullet || onlyBullet === title) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function normalizeDescription(value: string | undefined): string {
@@ -69,6 +81,12 @@ async function processVideoContent(input: {
   existingTranscriptSource?: string | null;
   existingSummaryBullets?: string[] | null;
 }) {
+  const supportText = await fetchVideoSupportText(input.videoId);
+  const bestDescription =
+    (supportText.descriptionText && supportText.descriptionText.length > input.description.length
+      ? supportText.descriptionText
+      : input.description) || input.title;
+
   let transcriptText = input.existingTranscriptText?.trim() || null;
   let transcriptSource = input.existingTranscriptSource || "Transcript unavailable";
 
@@ -76,6 +94,11 @@ async function processVideoContent(input: {
     const transcriptResult = await fetchBestTranscript(input.videoId);
     transcriptText = transcriptResult.transcriptText;
     transcriptSource = transcriptResult.transcriptSource;
+
+    if (!transcriptText && bestDescription.trim().length > 80) {
+      transcriptText = bestDescription;
+      transcriptSource = "Video description";
+    }
   }
 
   const summaryBullets =
@@ -83,11 +106,12 @@ async function processVideoContent(input: {
       ? input.existingSummaryBullets
       : buildSummaryBullets({
           title: input.title,
-          description: input.description,
+          description: bestDescription,
           transcriptText,
         });
 
   return {
+    description: bestDescription,
     transcriptText,
     transcriptSource,
     summaryBullets,
@@ -162,7 +186,7 @@ export async function runIngestion() {
 
           if (existing) {
             const needsTranscript = !hasTranscript(existing);
-            const needsSummary = !hasSummary(existing);
+            const needsSummary = !hasUsefulSummary(existing);
 
             if (!needsTranscript && !needsSummary) {
               continue;
@@ -179,7 +203,7 @@ export async function runIngestion() {
 
             await storage.updateVideo(existing.id, {
               title,
-              description,
+              description: processed.description,
               thumbnailUrl,
               youtubeUrl,
               publishedAt,
@@ -205,7 +229,7 @@ export async function runIngestion() {
             youtubeVideoId: videoId,
             channelId: channel.id,
             title,
-            description,
+            description: processed.description,
             thumbnailUrl,
             youtubeUrl,
             publishedAt,
