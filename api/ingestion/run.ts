@@ -8,9 +8,10 @@ export default async function handler(_req: any, res: any) {
     const result = await runIngestion({
       mode: "repair",
       deadlineMs: 55_000,
-      repairLimit: 20,
-      channelLimit: 4,
-      maxRecentVideosPerChannel: 1,
+      repairLimit: 30,
+      channelLimit: 0,
+      maxRecentVideosPerChannel: 0,
+      scanChannels: false,
     });
 
     return res.status(200).json({ message: result.message });

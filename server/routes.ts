@@ -34,9 +34,10 @@ export function registerRoutes(app: Express) {
         const result = await runIngestion({
           mode: "repair",
           deadlineMs: 55_000,
-          repairLimit: 20,
-          channelLimit: 4,
-          maxRecentVideosPerChannel: 1,
+          repairLimit: 30,
+          channelLimit: 0,
+          maxRecentVideosPerChannel: 0,
+          scanChannels: false,
         });
         return res.json({ message: result.message });
       }
@@ -175,9 +176,10 @@ export function registerRoutes(app: Express) {
       const result = await runIngestion({
         mode: "repair",
         deadlineMs: 55_000,
-        repairLimit: 30,
+        repairLimit: 40,
         channelLimit: 8,
         maxRecentVideosPerChannel: 2,
+        scanChannels: true,
       });
       res.json({ message: result.message });
     } catch (err) {

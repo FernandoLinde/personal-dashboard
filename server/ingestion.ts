@@ -1,4 +1,5 @@
 import Parser from "rss-parser";
+import pLimit from "p-limit";
 import YouTubeSR from "youtube-sr";
 import type { InsertChannel, Video } from "../shared/schema.js";
 import { storage } from "./storage.js";
@@ -41,6 +42,7 @@ type IngestionOptions = {
   repairLimit?: number;
   channelLimit?: number;
   maxRecentVideosPerChannel?: number;
+  scanChannels?: boolean;
 };
 
 function hasTranscript(video: Pick<Video, "transcriptText">): boolean {
@@ -202,48 +204,48 @@ function hasTimeRemaining(deadlineAt: number): boolean {
 
 async function repairExistingVideos(addLog: (message: string) => void, deadlineAt: number, limit: number) {
   let repaired = 0;
-  const candidates = await storage.getVideosForRepair(limit);
+  const repairConcurrency = pLimit(3);
+  const candidates = (await storage.getVideosForRepair(limit)).filter((video) => needsRepair(video));
 
-  for (const video of candidates) {
-    if (!hasTimeRemaining(deadlineAt)) {
-      addLog("Stopped repair pass early to stay within time limit.");
-      break;
-    }
+  await Promise.all(
+    candidates.map((video) =>
+      repairConcurrency(async () => {
+        if (!hasTimeRemaining(deadlineAt)) {
+          return;
+        }
 
-    if (!needsRepair(video)) {
-      continue;
-    }
+        try {
+          const processed = await processVideoContent({
+            videoId: video.youtubeVideoId,
+            title: video.title,
+            description: normalizeDescription(video.description ?? ""),
+            youtubeUrl: video.youtubeUrl,
+            existingTranscriptText: video.transcriptText,
+            existingTranscriptSource: video.transcriptSource,
+            existingSummaryBullets: video.summaryBullets ?? null,
+          });
 
-    try {
-      const processed = await processVideoContent({
-        videoId: video.youtubeVideoId,
-        title: video.title,
-        description: normalizeDescription(video.description ?? ""),
-        youtubeUrl: video.youtubeUrl,
-        existingTranscriptText: video.transcriptText,
-        existingTranscriptSource: video.transcriptSource,
-        existingSummaryBullets: video.summaryBullets ?? null,
-      });
+          await storage.updateVideo(video.id, {
+            description: processed.description,
+            transcriptText: processed.transcriptText,
+            transcriptSource: processed.transcriptSource,
+            summaryBullets: processed.summaryBullets,
+            durationSeconds: processed.durationSeconds ?? null,
+            status: processed.status,
+          });
 
-      await storage.updateVideo(video.id, {
-        description: processed.description,
-        transcriptText: processed.transcriptText,
-        transcriptSource: processed.transcriptSource,
-        summaryBullets: processed.summaryBullets,
-        durationSeconds: processed.durationSeconds ?? null,
-        status: processed.status,
-      });
-
-      repaired++;
-      addLog(
-        processed.status === "filtered"
-          ? `Filtered short video: ${video.title}`
-          : `Repaired transcript/summary for: ${video.title}`,
-      );
-    } catch (error) {
-      addLog(`Repair failed for ${video.title}: ${(error as Error).message}`);
-    }
-  }
+          repaired++;
+          addLog(
+            processed.status === "filtered"
+              ? `Filtered short video: ${video.title}`
+              : `Repaired transcript/summary for: ${video.title}`,
+          );
+        } catch (error) {
+          addLog(`Repair failed for ${video.title}: ${(error as Error).message}`);
+        }
+      }),
+    ),
+  );
 
   return repaired;
 }
@@ -253,6 +255,7 @@ export async function runIngestion(options?: IngestionOptions) {
   const run = await storage.createIngestionRun({ status: "running" });
   const deadlineAt = buildDeadline(options);
   const mode = options?.mode ?? "full";
+  const shouldScanChannels = options?.scanChannels ?? mode !== "repair";
 
   let videosFound = 0;
   let videosCreated = 0;
@@ -274,7 +277,7 @@ export async function runIngestion(options?: IngestionOptions) {
       );
     }
 
-    if (!hasTimeRemaining(deadlineAt)) {
+    if (!shouldScanChannels || !hasTimeRemaining(deadlineAt)) {
       await storage.updateIngestionRun(run.id, {
         status: "completed",
         finishedAt: new Date(),
