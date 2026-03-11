@@ -1,3 +1,4 @@
+import OpenAI from "openai";
 import { YoutubeTranscript } from "youtube-transcript";
 
 const REQUEST_HEADERS = {
@@ -5,6 +6,17 @@ const REQUEST_HEADERS = {
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
   "Accept-Language": "en-US,en;q=0.9",
 };
+
+const openaiApiKey =
+  process.env.OPENAI_API_KEY || process.env.AI_INTEGRATIONS_OPENAI_API_KEY || "";
+const openaiBaseUrl = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
+const summaryModel = process.env.OPENAI_SUMMARY_MODEL || "gpt-5-nano";
+const openaiClient = openaiApiKey
+  ? new OpenAI({
+      apiKey: openaiApiKey,
+      ...(openaiBaseUrl ? { baseURL: openaiBaseUrl } : {}),
+    })
+  : null;
 
 const STOP_WORDS = new Set([
   "a",
@@ -232,6 +244,56 @@ export function buildSummaryBullets(input: {
     .filter((bullet) => !isTitleLikeBullet(bullet, input.title))
     .slice(0, 4);
   return fallbackBullets.length > 0 ? fallbackBullets : [input.title.trim()];
+}
+
+function parseBulletList(text: string, title: string): string[] {
+  return text
+    .split(/\r?\n/)
+    .map((line) => normalizeWhitespace(line.replace(/^[-*\u2022\d.)\s]+/, "")))
+    .filter((line) => line.length >= 20 && !isTitleLikeBullet(line, title))
+    .slice(0, 4);
+}
+
+export async function buildSummaryBulletsWithAI(input: {
+  title: string;
+  description?: string | null;
+  transcriptText?: string | null;
+}): Promise<string[]> {
+  const fallbackBullets = buildSummaryBullets(input);
+  const sourceText = cleanText(input.transcriptText ?? input.description ?? "");
+
+  if (!openaiClient || sourceText.length < 120) {
+    return fallbackBullets;
+  }
+
+  try {
+    const completion = await openaiClient.chat.completions.create({
+      model: summaryModel,
+      messages: [
+        {
+          role: "system",
+          content:
+            "Summarize a YouTube video into 3 concise bullet points. Return only bullet lines, with no heading or explanation.",
+        },
+        {
+          role: "user",
+          content: [
+            `Title: ${input.title}`,
+            "",
+            "Use the following source text:",
+            sourceText.slice(0, 12000),
+          ].join("\n"),
+        },
+      ],
+      max_completion_tokens: 220,
+    });
+
+    const content = completion.choices[0]?.message?.content ?? "";
+    const aiBullets = parseBulletList(content, input.title);
+    return aiBullets.length > 0 ? aiBullets : fallbackBullets;
+  } catch {
+    return fallbackBullets;
+  }
 }
 
 async function fetchTranscriptWithLibrary(videoId: string): Promise<string | null> {

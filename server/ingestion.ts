@@ -5,6 +5,7 @@ import type { InsertChannel, Video } from "../shared/schema.js";
 import { storage } from "./storage.js";
 import {
   buildSummaryBullets,
+  buildSummaryBulletsWithAI,
   fetchBestTranscriptWithSupport,
   fetchVideoSupportText,
 } from "./video-processing.js";
@@ -45,8 +46,12 @@ type IngestionOptions = {
   scanChannels?: boolean;
 };
 
-function hasTranscript(video: Pick<Video, "transcriptText">): boolean {
-  return !!video.transcriptText?.trim();
+function hasTranscript(video: Pick<Video, "transcriptText" | "transcriptSource">): boolean {
+  if (!video.transcriptText?.trim()) {
+    return false;
+  }
+
+  return video.transcriptSource === "YouTube transcript";
 }
 
 function hasUsefulSummary(video: Pick<Video, "summaryBullets" | "title">): boolean {
@@ -92,7 +97,10 @@ function isShortFormVideo(input: {
 }
 
 function needsRepair(
-  video: Pick<Video, "title" | "transcriptText" | "summaryBullets" | "youtubeUrl" | "durationSeconds">,
+  video: Pick<
+    Video,
+    "title" | "transcriptText" | "transcriptSource" | "summaryBullets" | "youtubeUrl" | "durationSeconds"
+  >,
 ): boolean {
   return (
     isShortFormVideo({
@@ -160,8 +168,10 @@ async function processVideoContent(input: {
 
   let transcriptText = input.existingTranscriptText?.trim() || null;
   let transcriptSource = input.existingTranscriptSource || "Transcript unavailable";
+  const hadReliableTranscript =
+    !!input.existingTranscriptText?.trim() && input.existingTranscriptSource === "YouTube transcript";
 
-  if (!transcriptText) {
+  if (!hadReliableTranscript) {
     const transcriptResult = await fetchBestTranscriptWithSupport(
       input.videoId,
       supportText.watchPageData,
@@ -175,12 +185,22 @@ async function processVideoContent(input: {
     }
   }
 
-  const summaryBullets =
+  const shouldReuseSummary =
     hasUsefulSummary({
       title: input.title,
       summaryBullets: input.existingSummaryBullets ?? null,
     })
-      ? [...(input.existingSummaryBullets ?? [])]
+    && transcriptText === (input.existingTranscriptText?.trim() || null)
+    && transcriptSource === (input.existingTranscriptSource || "Transcript unavailable");
+
+  const summaryBullets = shouldReuseSummary
+    ? [...(input.existingSummaryBullets ?? [])]
+    : openaiApiKeyIsPresent()
+      ? await buildSummaryBulletsWithAI({
+          title: input.title,
+          description: bestDescription,
+          transcriptText,
+        })
       : buildSummaryBullets({
           title: input.title,
           description: bestDescription,
@@ -195,6 +215,13 @@ async function processVideoContent(input: {
     durationSeconds,
     status: "processed" as const,
   };
+}
+
+function openaiApiKeyIsPresent(): boolean {
+  return !!(
+    process.env.OPENAI_API_KEY ||
+    process.env.AI_INTEGRATIONS_OPENAI_API_KEY
+  );
 }
 
 function buildDeadline(options?: IngestionOptions): number {
