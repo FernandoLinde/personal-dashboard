@@ -90,6 +90,8 @@ function cleanText(text: string): string {
   );
 }
 
+const RE_XML_TRANSCRIPT = /<text start="([^"]*)" dur="([^"]*)">([^<]*)<\/text>/g;
+
 function stripHtml(text: string): string {
   return text.replace(/<[^>]+>/g, " ");
 }
@@ -288,8 +290,8 @@ function extractStructuredSection(
 
 type WatchPageData = {
   description: string | null;
-  captionTracks: string[];
   durationSeconds: number | null;
+  innertubeApiKey: string | null;
 };
 
 function parseDurationSeconds(value: unknown): number | null {
@@ -332,46 +334,74 @@ async function fetchWatchPageData(videoId: string): Promise<WatchPageData> {
 
   const descriptionMatch = playerResponse.match(/"shortDescription":"((?:[^"\\]|\\.)*)"/);
   const durationMatch = playerResponse.match(/"lengthSeconds":"(\d+)"/);
-  const captionTracksBlock =
-    extractStructuredSection(playerResponse, '"captionTracks":', "[", "]") ??
-    extractStructuredSection(html, '"captionTracks":', "[", "]");
+  const apiKeyMatch =
+    html.match(/"INNERTUBE_API_KEY":"([^"]+)"/) ??
+    html.match(/INNERTUBE_API_KEY\\":\\"([^\\"]+)\\"/);
 
   const description = cleanText(
     stripHtml(decodeEscapedJsonString(descriptionMatch?.[1] ?? "")),
   );
   const durationSeconds = parseDurationSeconds(durationMatch?.[1] ?? null);
-  const captionTracks = captionTracksBlock
-    ? Array.from(
-        captionTracksBlock.matchAll(/"baseUrl":"((?:[^"\\]|\\.)*)"/g),
-        (match) => decodeEscapedJsonString(match[1]),
-      )
-    : [];
 
   return {
     description: description || null,
-    captionTracks,
     durationSeconds,
+    innertubeApiKey: apiKeyMatch?.[1] ?? null,
   };
 }
 
-async function fetchTranscriptFromWatchPage(videoId: string): Promise<string | null> {
-  const watchPageData = await fetchWatchPageData(videoId);
-  const captionTracks = watchPageData.captionTracks;
+async function fetchTranscriptFromInnertube(
+  videoId: string,
+  watchPageData?: WatchPageData,
+): Promise<string | null> {
+  const resolvedWatchPageData = watchPageData ?? (await fetchWatchPageData(videoId));
+  const apiKey = resolvedWatchPageData.innertubeApiKey;
+  if (!apiKey) {
+    return null;
+  }
+
+  const playerResponse = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${apiKey}`, {
+    method: "POST",
+    headers: {
+      ...REQUEST_HEADERS,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      context: {
+        client: {
+          clientName: "ANDROID",
+          clientVersion: "20.10.38",
+        },
+      },
+      videoId,
+    }),
+  });
+
+  if (!playerResponse.ok) {
+    throw new Error(`Innertube player returned ${playerResponse.status}`);
+  }
+
+  const playerJson = await playerResponse.json();
+  const captionTracks =
+    playerJson?.captions?.playerCaptionsTracklistRenderer?.captionTracks ??
+    playerJson?.playerCaptionsTracklistRenderer?.captionTracks ??
+    [];
+
   if (captionTracks.length === 0) {
     return null;
   }
 
   const preferredTrack =
-    captionTracks.find((track) => track.includes("lang=en") && !track.includes("kind=asr")) ??
-    captionTracks.find((track) => track.includes("lang=en")) ??
+    captionTracks.find((track: any) => track?.languageCode === "en" && track?.kind !== "asr") ??
+    captionTracks.find((track: any) => track?.languageCode === "en") ??
     captionTracks[0];
 
-  if (!preferredTrack) {
+  if (!preferredTrack?.baseUrl) {
     return null;
   }
 
-  const transcriptUrl = new URL(preferredTrack);
-  transcriptUrl.searchParams.set("fmt", "json3");
+  const transcriptUrl = new URL(preferredTrack.baseUrl);
+  transcriptUrl.searchParams.delete("fmt");
 
   const transcriptResponse = await fetch(transcriptUrl.toString(), {
     headers: REQUEST_HEADERS,
@@ -381,12 +411,11 @@ async function fetchTranscriptFromWatchPage(videoId: string): Promise<string | n
     throw new Error(`Caption track returned ${transcriptResponse.status}`);
   }
 
-  const transcriptJson = await transcriptResponse.json();
-  const events = Array.isArray(transcriptJson?.events) ? transcriptJson.events : [];
-  const transcript = events
-    .flatMap((event: any) => (Array.isArray(event?.segs) ? event.segs : []))
-    .map((segment: any) => segment?.utf8 ?? "")
-    .join(" ");
+  const transcriptBody = await transcriptResponse.text();
+  const transcript = Array.from(
+    transcriptBody.matchAll(RE_XML_TRANSCRIPT),
+    (match) => decodeHtmlEntities(match[3]),
+  ).join(" ");
 
   return cleanText(transcript) || null;
 }
@@ -394,17 +423,20 @@ async function fetchTranscriptFromWatchPage(videoId: string): Promise<string | n
 export async function fetchVideoSupportText(videoId: string): Promise<{
   descriptionText: string | null;
   durationSeconds: number | null;
+  watchPageData: WatchPageData | null;
 }> {
   try {
     const watchPageData = await fetchWatchPageData(videoId);
     return {
       descriptionText: watchPageData.description,
       durationSeconds: watchPageData.durationSeconds,
+      watchPageData,
     };
   } catch {
     return {
       descriptionText: null,
       durationSeconds: null,
+      watchPageData: null,
     };
   }
 }
@@ -413,11 +445,26 @@ export async function fetchBestTranscript(videoId: string): Promise<{
   transcriptText: string | null;
   transcriptSource: string;
 }> {
-  const strategies = [fetchTranscriptWithLibrary, fetchTranscriptFromWatchPage];
+  return fetchBestTranscriptWithSupport(videoId);
+}
+
+export async function fetchBestTranscriptWithSupport(
+  videoId: string,
+  watchPageData?: WatchPageData | null,
+): Promise<{
+  transcriptText: string | null;
+  transcriptSource: string;
+}> {
+  const resolvedWatchPageData =
+    watchPageData === undefined ? await fetchWatchPageData(videoId).catch(() => null) : watchPageData;
+  const strategies = [
+    () => fetchTranscriptFromInnertube(videoId, resolvedWatchPageData ?? undefined),
+    () => fetchTranscriptWithLibrary(videoId),
+  ];
 
   for (const strategy of strategies) {
     try {
-      const transcriptText = await strategy(videoId);
+      const transcriptText = await strategy();
       if (transcriptText) {
         return {
           transcriptText,

@@ -34,7 +34,7 @@ export function registerRoutes(app: Express) {
         const result = await runIngestion({
           mode: "repair",
           deadlineMs: 55_000,
-          repairLimit: 30,
+          repairLimit: 100,
           channelLimit: 0,
           maxRecentVideosPerChannel: 0,
           scanChannels: false,
@@ -176,7 +176,7 @@ export function registerRoutes(app: Express) {
       const result = await runIngestion({
         mode: "repair",
         deadlineMs: 55_000,
-        repairLimit: 40,
+        repairLimit: 200,
         channelLimit: 8,
         maxRecentVideosPerChannel: 2,
         scanChannels: true,

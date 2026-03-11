@@ -5,7 +5,7 @@ import type { InsertChannel, Video } from "../shared/schema.js";
 import { storage } from "./storage.js";
 import {
   buildSummaryBullets,
-  fetchBestTranscript,
+  fetchBestTranscriptWithSupport,
   fetchVideoSupportText,
 } from "./video-processing.js";
 
@@ -162,7 +162,10 @@ async function processVideoContent(input: {
   let transcriptSource = input.existingTranscriptSource || "Transcript unavailable";
 
   if (!transcriptText) {
-    const transcriptResult = await fetchBestTranscript(input.videoId);
+    const transcriptResult = await fetchBestTranscriptWithSupport(
+      input.videoId,
+      supportText.watchPageData,
+    );
     transcriptText = transcriptResult.transcriptText;
     transcriptSource = transcriptResult.transcriptSource;
 
